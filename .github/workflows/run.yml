@@ -1,0 +1,26 @@
+name: 24/7 Odds Radar Bot
+
+on:
+  schedule:
+    - cron: '*/15 * * * *'  # 15분마다 24시간 클라우드 자동 실행
+  workflow_dispatch:        # 수동 즉시 실행 지원
+
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v3
+
+      - name: 파이썬 설치
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: 필수 부품 설치
+        run: |
+          pip install requests beautifulsoup4 cloudscraper deep-translator feedparser schedule
+
+      - name: 오즈 레이더 봇 가동
+        run: |
+          python odds_radar.py
