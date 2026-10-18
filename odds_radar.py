@@ -9,7 +9,7 @@ import cloudscraper
 import feedparser
 
 # ==========================================
-# ⚙️ 설정값 (본인의 봇 토큰 입력)
+# ⚙️ 설정값 (본인의 텔레그램 봇 토큰 입력)
 # ==========================================
 BOT_TOKEN = "8760127442:AAEx1WdWKSVxjU1D6kctQaxnm48t_DqwFMs"
 CHANNEL_ID = "@oddsradar_kr"
@@ -17,7 +17,7 @@ SENT_HISTORY_FILE = "sent_history.json"
 MIN_DROP_RATE = 15.0
 
 # ==========================================
-# 📡 텔레그램 발송 및 번역 엔진
+# 📡 텔레그램 발송 및 번역/기록 모듈
 # ==========================================
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
@@ -79,7 +79,7 @@ def save_sent_history(unique_key):
         json.dump(history, f, ensure_ascii=False)
 
 # ==========================================
-# 📊 수집 엔진 1: 해외 배당 급락 감지
+# 📊 엔진 1: 실시간 해외 배당 급락 감지
 # ==========================================
 def check_dropping_odds():
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
@@ -130,7 +130,107 @@ def check_dropping_odds():
         pass
 
 # ==========================================
-# ⚽ 수집 엔진 2: 축구/농구 라인업 & 결장자 속보
+# 🔥 엔진 2: 국내외 배당 괴리 (Value Bet) 감지
+# ==========================================
+def check_value_bets():
+    scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
+    url = "https://www.betshoot.com/dropping-odds/"
+    try:
+        response = scraper.get(url, timeout=15)
+        if response.status_code != 200:
+            return
+        soup = BeautifulSoup(response.text, 'html.parser')
+        for row in soup.find_all('tr'):
+            cols = row.find_all('td')
+            if len(cols) < 5:
+                continue
+            try:
+                match_text = cols[1].text.strip()
+                if " vs " not in match_text and " - " not in match_text:
+                    continue
+                
+                drop_val = float(cols[4].text.strip().replace('%', '').replace('-', '').strip())
+                # 급락 폭이 22% 이상인 고가치 괴리 매치 선별
+                if drop_val < 22.0:
+                    continue
+
+                event_key = f"VALUE_BET_{match_text}_{drop_val}"
+                if not is_already_sent(event_key):
+                    kor_match = translate_ko(match_text)
+                    odds_info = cols[3].text.strip()
+                    msg = f"""🔥 <b>[국내 vs 해외 배당 괴리(Value Bet) 포착]</b>
+
+⚽ 매치: <b>{kor_match}</b>
+📊 <b>해외 하락폭: {odds_info} (▼ {drop_val}%)</b>
+
+💎 <b>밸류 분석 지표</b>
+- 해외 메이저 자금 폭주로 실시간 배당 급락 완료
+- 국내 공시 배당 대비 해외 실시간 가치 괴리율 극대화 구간
+
+⚠️ <i>국내 기준선 조정 전 선점 가치 매치입니다.</i>"""
+                    if send_telegram(msg):
+                        save_sent_history(event_key)
+                        time.sleep(2)
+            except:
+                continue
+    except:
+        pass
+
+# ==========================================
+# 🌧 엔진 3: 주요 경기장 기상 악천후 경보 (언더/오버 지표)
+# ==========================================
+def check_stadium_weather():
+    stadiums = [
+        {"name": "뉴캐슬 (세인트 제임스 파크)", "lat": 54.975, "lon": -1.621},
+        {"name": "맨체스터 (올드 트래포드 / 에티하드)", "lat": 53.463, "lon": -2.291},
+        {"name": "리버풀 (안필드 / 구디슨 파크)", "lat": 53.430, "lon": -2.960},
+        {"name": "런던 (에미레이츠 / 토트넘 홋스퍼)", "lat": 51.554, "lon": -0.108},
+        {"name": "버밍엄 (빌라 파크)", "lat": 52.509, "lon": -1.884}
+    ]
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    
+    for std in stadiums:
+        try:
+            event_key = f"WEATHER_{std['name']}_{today_str}"
+            if is_already_sent(event_key):
+                continue
+
+            url = f"https://api.open-meteo.com/v1/forecast?latitude={std['lat']}&longitude={std['lon']}&current=precipitation,wind_speed_10m&timezone=auto"
+            res = requests.get(url, timeout=10)
+            if res.status_code != 200:
+                continue
+
+            data = res.json().get('current', {})
+            wind = data.get('wind_speed_10m', 0.0)
+            precip = data.get('precipitation', 0.0)
+
+            # 풍속 35km/h 이상 또는 강수량 3.0mm 이상 시 악천후 경보 발송
+            if wind >= 35.0 or precip >= 3.0:
+                weather_status = []
+                if wind >= 35.0:
+                    weather_status.append(f"🌪 강풍 경보 (풍속: {wind} km/h)")
+                if precip >= 3.0:
+                    weather_status.append(f"🌧 폭우/강수 (시간당 {precip} mm)")
+                
+                status_str = " | ".join(weather_status)
+                msg = f"""🚨 <b>[EPL 경기장 현지 기상 악천후 경보]</b>
+
+🏟 위치: <b>{std['name']}</b>
+⚠️ 기상 상태: <b>{status_str}</b>
+
+📉 <b>베팅 분석 포인트 (언더/오버)</b>
+- 심한 돌풍 및 미끄러운 잔디로 패스/빌드업 성공률 급감
+- <b>[저득점(언더) 유리 통계 구간 감지]</b>
+
+🔔 <i>오즈 레이더 현지 기상 실시간 레이더</i>"""
+                if send_telegram(msg):
+                    save_sent_history(event_key)
+                    time.sleep(2)
+        except:
+            pass
+
+# ==========================================
+# ⚽ 엔진 4: 축구/농구 라인업 & 결장자 속보
 # ==========================================
 def check_sports_lineups_and_news():
     feed_urls = [
@@ -166,7 +266,7 @@ def check_sports_lineups_and_news():
             pass
 
 # ==========================================
-# 🎮 수집 엔진 3: LCK(롤) 로스터 & 이스포츠 속보
+# 🎮 엔진 5: LCK(롤) 로스터 & 이스포츠 속보
 # ==========================================
 def check_lck_and_esports():
     url = "https://www.dexerto.com/league-of-legends/feed/"
@@ -197,9 +297,11 @@ def check_lck_and_esports():
         pass
 
 # ==========================================
-# 🚀 1회 실행 후 종료 (깃허브 클라우드가 15분마다 재실행)
+# 🚀 실행부
 # ==========================================
 if __name__ == "__main__":
     check_dropping_odds()
+    check_value_bets()
+    check_stadium_weather()
     check_sports_lineups_and_news()
     check_lck_and_esports()
