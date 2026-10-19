@@ -1,39 +1,40 @@
-name: 24/7 Odds Radar Bot
+name: Run Odds Radar Bot
 
 on:
   schedule:
-    - cron: '*/15 * * * *'
-  workflow_dispatch:
+    - cron: '*/15 * * * *'  # 15분마다 24시간 자동 실행
+  workflow_dispatch:        # 'Run workflow' 수동 즉시 실행 버튼 활성화
 
 permissions:
-  contents: write
+  contents: write           # sent_history.json 저장을 위한 쓰기 권한 부여
 
 jobs:
-  run-bot:
+  run-radar:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 코드 체크아웃
+      - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: 파이썬 설치
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
-      - name: 필수 부품 설치
+      - name: Install Dependencies
         run: |
-          pip install requests beautifulsoup4 cloudscraper deep-translator feedparser schedule
+          python -m pip install --upgrade pip
+          pip install requests beautifulsoup4 cloudscraper feedparser
 
-      - name: 오즈 레이더 봇 가동
+      - name: Run Odds Radar Bot
         run: |
           python odds_radar.py
 
-      - name: 중복 방지 기록 영구 저장 (Cloud History Save)
+      - name: Commit and Push sent_history
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          if [ -f sent_history.json ]; then
-            git add sent_history.json
-            git commit -m "Update sent history [skip ci]" || exit 0
-            git push
-          fi
+          git pull || true
+          git add sent_history.json
+          git commit -m "Auto: Update sent_history [skip ci]" || echo "No changes to commit"
+          git push
