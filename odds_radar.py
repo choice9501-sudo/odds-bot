@@ -14,7 +14,7 @@ import feedparser
 BOT_TOKEN = "8760127442:AAEx1WdWKSVxjU1D6kctQaxnm48t_DqwFMs"
 CHANNEL_ID = "@oddsradar_kr"
 SENT_HISTORY_FILE = "sent_history.json"
-MIN_DROP_RATE = 12.0  # 국내/아시아 낮 경기 감지를 위해 12%로 상향 조정
+MIN_DROP_RATE = 12.0
 
 # ==========================================
 # 📡 텔레그램 발송 및 번역/기록 모듈
@@ -74,32 +74,29 @@ def save_sent_history(unique_key):
         except:
             history = []
     history.append(unique_key)
-    history = history[-500:]
+    history = history[-1000:]
     with open(SENT_HISTORY_FILE, "w", encoding="utf-8") as f:
         json.dump(history, f, ensure_ascii=False)
 
 # ==========================================
-# 🇰🇷 [신규] 엔진 1: KBO / K리그 / KBL 국내 스포츠 속보
+# 🇰🇷 엔진 1: KBO / K리그 / KBL 국내 스포츠 속보
 # ==========================================
 def check_korean_sports():
-    # KBO 선발투수 예고, K리그 라인업, KBL 결장 실시간 검색 피드
+    today_str = datetime.now().strftime("%Y%m%d")
     url = "https://news.google.com/rss/search?q=(KBO+OR+K%EB%A6%AC%EA%B7%B8+OR+KBL)+AND+(%EC%84%A0%EB%B0%9C+OR+%EB%9D%BC%EC%9D%B8%EC%97%85+OR+%EA%B2%B0%EC%9E%A5+OR+%EB%B6%80%EC%83%81+OR+%EC%97%94%ED%8A%B8%EB%A6%AC)&hl=ko&gl=KR&ceid=KR:ko"
     try:
         feed = feedparser.parse(url)
         for entry in feed.entries[:5]:
             title = clean_text(entry.title)
             summary = clean_text(entry.summary if hasattr(entry, 'summary') else entry.title)
-            
-            # 언론사명 제거 및 핵심 키워드 검증
             title_clean = re.sub(r' - [^-]+$', '', title).strip()
-            keywords = ["선발", "라인업", "결장", "부상", "엔트리", "말소", "등록", "로스터"]
             
+            keywords = ["선발", "라인업", "결장", "부상", "엔트리", "말소", "등록", "로스터"]
             if any(kw in title_clean for kw in keywords):
-                event_key = f"KOR_SPORTS_{title_clean}"
+                # 오늘 날짜 + 기사 제목 앞 15글자로 중복 완벽 고정
+                event_key = f"KOR_SPORTS_{today_str}_{title_clean[:15]}"
                 if not is_already_sent(event_key):
-                    # 종목 태그 자동 판정
-                    tag = "⚾ KBO 프로야구" if "KBO" in title_clean or "야구" in title_clean or "투수" in title_clean else ("⚽ K리그" if "K리그" in title_clean or "축구" in title_clean else "🏀 KBL 농구")
-                    
+                    tag = "⚾ KBO 프로야구" if any(x in title_clean for x in ["KBO", "야구", "투수"]) else ("⚽ K리그" if any(x in title_clean for x in ["K리그", "축구"]) else "🏀 KBL 농구")
                     msg = f"""🚨 <b>[{tag} 공식 라인업 & 긴급 속보]</b>
 
 📌 <b>헤드라인:</b> <b>{title_clean}</b>
@@ -115,9 +112,10 @@ def check_korean_sports():
         pass
 
 # ==========================================
-# 📊 엔진 2: 실시간 해외 배당 급락 감지 (-12% 이상)
+# 📊 엔진 2: 실시간 해외 배당 급락 감지
 # ==========================================
 def check_dropping_odds():
+    today_str = datetime.now().strftime("%Y%m%d")
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     url = "https://www.betshoot.com/dropping-odds/"
     try:
@@ -143,7 +141,8 @@ def check_dropping_odds():
                 if drop_val < MIN_DROP_RATE:
                     continue
 
-                event_key = f"ODDS_{home}_{away}_{drop_val}"
+                # 핵심 수정: 소수점 변동과 무관하게 '오늘 날짜_경기매치'로 중복 원천 차단
+                event_key = f"ODDS_{today_str}_{home.strip()}_{away.strip()}"
                 if not is_already_sent(event_key):
                     kor_home = translate_ko(home)
                     kor_away = translate_ko(away)
@@ -169,6 +168,7 @@ def check_dropping_odds():
 # 🔥 엔진 3: 국내외 배당 괴리 (Value Bet) 감지
 # ==========================================
 def check_value_bets():
+    today_str = datetime.now().strftime("%Y%m%d")
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
     url = "https://www.betshoot.com/dropping-odds/"
     try:
@@ -189,7 +189,8 @@ def check_value_bets():
                 if drop_val < 20.0:
                     continue
 
-                event_key = f"VALUE_BET_{match_text}_{drop_val}"
+                # 핵심 수정: 당일 동일 매치 괴리 중복 발송 차단
+                event_key = f"VALUE_BET_{today_str}_{match_text.strip()}"
                 if not is_already_sent(event_key):
                     kor_match = translate_ko(match_text)
                     odds_info = cols[3].text.strip()
@@ -267,6 +268,7 @@ def check_stadium_weather():
 # ⚽ 엔진 5: 해외축구 / NBA 라인업 & 결장자
 # ==========================================
 def check_sports_lineups_and_news():
+    today_str = datetime.now().strftime("%Y%m%d")
     feed_urls = [
         "https://www.espn.com/espn/rss/soccer/news",
         "https://www.espn.com/espn/rss/nba/news"
@@ -279,7 +281,7 @@ def check_sports_lineups_and_news():
                 summary = entry.summary if hasattr(entry, 'summary') else entry.title
                 keywords = ["lineup", "starting", "injury", "ruled out", "roster", "xi", "squad", "miss", "waiv", "sign", "pick"]
                 if any(kw in title.lower() or kw in summary.lower() for kw in keywords):
-                    event_key = f"LINEUP_NEWS_{entry.id if hasattr(entry, 'id') else title}"
+                    event_key = f"LINEUP_{today_str}_{title[:20]}"
                     if not is_already_sent(event_key):
                         kor_title = translate_ko(title)
                         time.sleep(1)
@@ -303,6 +305,7 @@ def check_sports_lineups_and_news():
 # 🎮 엔진 6: LCK(롤) 로스터 & 이스포츠 속보
 # ==========================================
 def check_lck_and_esports():
+    today_str = datetime.now().strftime("%Y%m%d")
     url = "https://www.dexerto.com/league-of-legends/feed/"
     try:
         feed = feedparser.parse(url)
@@ -311,7 +314,7 @@ def check_lck_and_esports():
             summary = entry.summary if hasattr(entry, 'summary') else entry.title
             keywords = ["lck", "t1", "faker", "gen.g", "roster", "worlds", "starting", "bench", "sign"]
             if any(kw in title.lower() for kw in keywords):
-                event_key = f"LCK_{entry.id if hasattr(entry, 'id') else title}"
+                event_key = f"LCK_{today_str}_{title[:20]}"
                 if not is_already_sent(event_key):
                     kor_title = translate_ko(title)
                     time.sleep(1)
@@ -334,9 +337,9 @@ def check_lck_and_esports():
 # 🚀 메인 실행부
 # ==========================================
 if __name__ == "__main__":
-    check_korean_sports()          # 국내 KBO/K리그/KBL 속보 (낮/오후 활성화)
-    check_dropping_odds()          # 실시간 배당 급락
-    check_value_bets()             # 배당 괴리 분석
-    check_stadium_weather()        # 경기장 날씨 특보
-    check_sports_lineups_and_news() # 해외축구/NBA 라인업
-    check_lck_and_esports()        # LCK 로스터 속보
+    check_korean_sports()
+    check_dropping_odds()
+    check_value_bets()
+    check_stadium_weather()
+    check_sports_lineups_and_news()
+    check_lck_and_esports()
