@@ -14,7 +14,7 @@ import feedparser
 BOT_TOKEN = "8760127442:AAEx1WdWKSVxjU1D6kctQaxnm48t_DqwFMs"
 CHANNEL_ID = "@oddsradar_kr"
 SENT_HISTORY_FILE = "sent_history.json"
-MIN_DROP_RATE = 15.0
+MIN_DROP_RATE = 12.0  # 국내/아시아 낮 경기 감지를 위해 12%로 상향 조정
 
 # ==========================================
 # 📡 텔레그램 발송 및 번역/기록 모듈
@@ -79,7 +79,43 @@ def save_sent_history(unique_key):
         json.dump(history, f, ensure_ascii=False)
 
 # ==========================================
-# 📊 엔진 1: 실시간 해외 배당 급락 감지
+# 🇰🇷 [신규] 엔진 1: KBO / K리그 / KBL 국내 스포츠 속보
+# ==========================================
+def check_korean_sports():
+    # KBO 선발투수 예고, K리그 라인업, KBL 결장 실시간 검색 피드
+    url = "https://news.google.com/rss/search?q=(KBO+OR+K%EB%A6%AC%EA%B7%B8+OR+KBL)+AND+(%EC%84%A0%EB%B0%9C+OR+%EB%9D%BC%EC%9D%B8%EC%97%85+OR+%EA%B2%B0%EC%9E%A5+OR+%EB%B6%80%EC%83%81+OR+%EC%97%94%ED%8A%B8%EB%A6%AC)&hl=ko&gl=KR&ceid=KR:ko"
+    try:
+        feed = feedparser.parse(url)
+        for entry in feed.entries[:5]:
+            title = clean_text(entry.title)
+            summary = clean_text(entry.summary if hasattr(entry, 'summary') else entry.title)
+            
+            # 언론사명 제거 및 핵심 키워드 검증
+            title_clean = re.sub(r' - [^-]+$', '', title).strip()
+            keywords = ["선발", "라인업", "결장", "부상", "엔트리", "말소", "등록", "로스터"]
+            
+            if any(kw in title_clean for kw in keywords):
+                event_key = f"KOR_SPORTS_{title_clean}"
+                if not is_already_sent(event_key):
+                    # 종목 태그 자동 판정
+                    tag = "⚾ KBO 프로야구" if "KBO" in title_clean or "야구" in title_clean or "투수" in title_clean else ("⚽ K리그" if "K리그" in title_clean or "축구" in title_clean else "🏀 KBL 농구")
+                    
+                    msg = f"""🚨 <b>[{tag} 공식 라인업 & 긴급 속보]</b>
+
+📌 <b>헤드라인:</b> <b>{title_clean}</b>
+
+📋 <b>핵심 브리핑:</b>
+{summary[:150]}...
+
+🔔 <i>국내 경기 전 공식 선발/결장 1초 속보 (오즈 레이더)</i>"""
+                    if send_telegram(msg):
+                        save_sent_history(event_key)
+                        time.sleep(2)
+    except:
+        pass
+
+# ==========================================
+# 📊 엔진 2: 실시간 해외 배당 급락 감지 (-12% 이상)
 # ==========================================
 def check_dropping_odds():
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
@@ -130,7 +166,7 @@ def check_dropping_odds():
         pass
 
 # ==========================================
-# 🔥 엔진 2: 국내외 배당 괴리 (Value Bet) 감지
+# 🔥 엔진 3: 국내외 배당 괴리 (Value Bet) 감지
 # ==========================================
 def check_value_bets():
     scraper = cloudscraper.create_scraper(browser={'browser': 'chrome', 'platform': 'windows', 'desktop': True})
@@ -150,8 +186,7 @@ def check_value_bets():
                     continue
                 
                 drop_val = float(cols[4].text.strip().replace('%', '').replace('-', '').strip())
-                # 급락 폭이 22% 이상인 고가치 괴리 매치 선별
-                if drop_val < 22.0:
+                if drop_val < 20.0:
                     continue
 
                 event_key = f"VALUE_BET_{match_text}_{drop_val}"
@@ -177,7 +212,7 @@ def check_value_bets():
         pass
 
 # ==========================================
-# 🌧 엔진 3: 주요 경기장 기상 악천후 경보 (언더/오버 지표)
+# 🌧 엔진 4: 주요 경기장 기상 악천후 경보
 # ==========================================
 def check_stadium_weather():
     stadiums = [
@@ -204,7 +239,6 @@ def check_stadium_weather():
             wind = data.get('wind_speed_10m', 0.0)
             precip = data.get('precipitation', 0.0)
 
-            # 풍속 35km/h 이상 또는 강수량 3.0mm 이상 시 악천후 경보 발송
             if wind >= 35.0 or precip >= 3.0:
                 weather_status = []
                 if wind >= 35.0:
@@ -230,7 +264,7 @@ def check_stadium_weather():
             pass
 
 # ==========================================
-# ⚽ 엔진 4: 축구/농구 라인업 & 결장자 속보
+# ⚽ 엔진 5: 해외축구 / NBA 라인업 & 결장자
 # ==========================================
 def check_sports_lineups_and_news():
     feed_urls = [
@@ -266,7 +300,7 @@ def check_sports_lineups_and_news():
             pass
 
 # ==========================================
-# 🎮 엔진 5: LCK(롤) 로스터 & 이스포츠 속보
+# 🎮 엔진 6: LCK(롤) 로스터 & 이스포츠 속보
 # ==========================================
 def check_lck_and_esports():
     url = "https://www.dexerto.com/league-of-legends/feed/"
@@ -297,11 +331,12 @@ def check_lck_and_esports():
         pass
 
 # ==========================================
-# 🚀 실행부
+# 🚀 메인 실행부
 # ==========================================
 if __name__ == "__main__":
-    check_dropping_odds()
-    check_value_bets()
-    check_stadium_weather()
-    check_sports_lineups_and_news()
-    check_lck_and_esports()
+    check_korean_sports()          # 국내 KBO/K리그/KBL 속보 (낮/오후 활성화)
+    check_dropping_odds()          # 실시간 배당 급락
+    check_value_bets()             # 배당 괴리 분석
+    check_stadium_weather()        # 경기장 날씨 특보
+    check_sports_lineups_and_news() # 해외축구/NBA 라인업
+    check_lck_and_esports()        # LCK 로스터 속보
